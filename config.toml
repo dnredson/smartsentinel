@@ -1,16 +1,24 @@
 [agent]
-device_id = "desktop1"
-sample_interval_sec = 60         # a cada quanto tempo coletar e enviar
-ping_count = 3                   # nº de pings por ciclo
+device_id = "vm1"
+sample_interval_sec = 5         # a cada quanto tempo coletar e enviar
+ping_count = 0                   # nº de pings por ciclo
 dlq_path = "./dlq"               # onde guardar falhas de envio (JSONL)
 
 [target]
 ip = "8.8.8.8"                   # IP (ou host) a testar conectividade
 
 [processes]
-names = [rpi_connectd,lora_pkt_fwd]  # nomes dos processos a monitorar
+#names = [rpi_connectd,lora_pkt_fwd]  # nomes dos processos a monitorar
+names = [] 
+
+[local_csv]
+enable = true                 # << NOVO: grava csv local
+path = "./samples.csv"
+rotate_by_size_mb = 50        # 0 = sem rotação por tamanho
+keep_rotations = 5            # quantos arquivos antigos manter (samples.csv.1, .2, ...)
 
 [firebase]
+enable = false     
 project_id = "monitor-f49c8"
 credentials_json_path = "./fbkeymonitor.json"  # arquivo de conta de serviço
 collection = "telemetry"           # coleção base no Firestore
