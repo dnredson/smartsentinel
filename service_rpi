@@ -1,0 +1,16 @@
+# /etc/systemd/system/monitor-agent@.service
+[Unit]
+Description=Monitor Agent (%i)
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/monitor-agent
+ExecStart=/opt/monitor-agent/.venv/bin/python /opt/monitor-agent/agent.py /etc/monitor-agent/config.toml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

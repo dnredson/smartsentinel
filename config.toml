@@ -1,0 +1,20 @@
+[agent]
+device_id = "desktop1"
+sample_interval_sec = 60         # a cada quanto tempo coletar e enviar
+ping_count = 3                   # nº de pings por ciclo
+dlq_path = "./dlq"               # onde guardar falhas de envio (JSONL)
+
+[target]
+ip = "8.8.8.8"                   # IP (ou host) a testar conectividade
+
+[processes]
+names = [rpi_connectd,lora_pkt_fwd]  # nomes dos processos a monitorar
+
+[firebase]
+project_id = "monitor-f49c8"
+credentials_json_path = "./fbkeymonitor.json"  # arquivo de conta de serviço
+collection = "telemetry"           # coleção base no Firestore
+
+[docker]
+enable = true
+timeout_sec = 3
