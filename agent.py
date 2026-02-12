@@ -39,7 +39,7 @@ rotate_by_size_mb = 50
 keep_rotations = 5
 """
 from __future__ import annotations
-
+import re
 import csv
 import json
 import os
@@ -76,6 +76,9 @@ def ensure_dir(p: str):
     if p:
         Path(p).mkdir(parents=True, exist_ok=True)
 
+def _sanitize_key(s: str) -> str:
+    
+    return re.sub(r"[^a-z0-9_]+", "_", (s or "").lower())
 
 def init_firebase(project_id: str | None, cred_path: str | None):
     """
@@ -212,35 +215,70 @@ def summarize_proc_status(p: psutil.Process) -> str:
         return "unknown"
 
 
-def collect_process_metrics(names: List[str]) -> Dict[str, Any]:
+def collect_process_metrics(names: List[str], cmdlines: List[str]) -> Dict[str, Any]:
     """
-    Agrega por nome (substring case-insensitive).
-    Para cada nome: soma CPU%, soma RSS, conta instâncias, estados únicos e PIDs.
-    """
-    wanted = [n.lower() for n in names]
-    agg: Dict[str, Dict[str, Any]] = {
-        n: {"instances": 0, "cpu_percent_sum": 0.0, "rss_bytes_sum": 0, "states": set(), "pids": []}
-        for n in wanted
-    }
+    Agrega por:
+      - names   : match por nome do executável (substring, case-insensitive)
+      - cmdlines: match por substring no comando completo (cmdline), case-insensitive
 
-    for p in psutil.process_iter(attrs=["name", "pid", "memory_info"]):
+    Para cada alvo: soma CPU%, soma RSS, conta instâncias, estados e PIDs.
+    As chaves no resultado são:
+      - name_<sanitizado>
+      - cmd_<sanitizado>
+    """
+    names_l = [n.lower() for n in (names or []) if n]
+    cmds_l  = [c.lower() for c in (cmdlines or []) if c]
+
+    # mapa interno: (kind, target_lower) -> agregadores
+    agg: Dict[tuple, Dict[str, Any]] = {}
+
+    for n in names_l:
+        agg[("name", n)] = {
+            "instances": 0, "cpu_percent_sum": 0.0, "rss_bytes_sum": 0,
+            "states": set(), "pids": []
+        }
+    for c in cmds_l:
+        agg[("cmd", c)] = {
+            "instances": 0, "cpu_percent_sum": 0.0, "rss_bytes_sum": 0,
+            "states": set(), "pids": []
+        }
+
+    for p in psutil.process_iter(attrs=["name", "pid", "memory_info", "cmdline"]):
         try:
             pname = (p.info.get("name") or "").lower()
-            for target in wanted:
+            pcmd  = " ".join(p.info.get("cmdline") or []).lower()
+
+            # match em names
+            for target in names_l:
                 if target and target in pname:
-                    agg[target]["instances"] += 1
-                    agg[target]["cpu_percent_sum"] += p.cpu_percent(interval=None)
+                    agg[("name", target)]["instances"] += 1
+                    agg[("name", target)]["cpu_percent_sum"] += p.cpu_percent(interval=None)
                     mi = p.info.get("memory_info")
                     if mi:
-                        agg[target]["rss_bytes_sum"] += getattr(mi, "rss", 0)
-                    agg[target]["states"].add(summarize_proc_status(psutil.Process(p.info["pid"])))
-                    agg[target]["pids"].append(p.info["pid"])
+                        agg[("name", target)]["rss_bytes_sum"] += getattr(mi, "rss", 0)
+                    agg[("name", target)]["states"].add(summarize_proc_status(psutil.Process(p.info["pid"])))
+                    agg[("name", target)]["pids"].append(p.info["pid"])
+
+            # match em cmdlines
+            for target in cmds_l:
+                if target and target in pcmd:
+                    agg[("cmd", target)]["instances"] += 1
+                    agg[("cmd", target)]["cpu_percent_sum"] += p.cpu_percent(interval=None)
+                    mi = p.info.get("memory_info")
+                    if mi:
+                        agg[("cmd", target)]["rss_bytes_sum"] += getattr(mi, "rss", 0)
+                    agg[("cmd", target)]["states"].add(summarize_proc_status(psutil.Process(p.info["pid"])))
+                    agg[("cmd", target)]["pids"].append(p.info["pid"])
+
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
 
     out: Dict[str, Any] = {}
-    for k, v in agg.items():
-        out[k] = {
+    for (kind, target), v in agg.items():
+        key = f"{kind}_{_sanitize_key(target)}"
+        out[key] = {
+            "match_kind": kind,            # "name" ou "cmd" (útil p/ debug)
+            "match_target": target,        # alvo original em lowercase
             "instances": v["instances"],
             "cpu_percent_total": round(v["cpu_percent_sum"], 2),
             "rss_bytes_total": v["rss_bytes_sum"],
@@ -248,6 +286,7 @@ def collect_process_metrics(names: List[str]) -> Dict[str, Any]:
             "pids": v["pids"],
         }
     return out
+
 
 
 # ----------------------- Docker Monitoring ------------------------------------
@@ -489,7 +528,8 @@ def main():
     dlq_path = agent.get("dlq_path", "./dlq")
 
     host = target.get("ip", "8.8.8.8")
-    proc_names = processes.get("names", [])
+    proc_names    = processes.get("names", [])
+    proc_cmdlines = processes.get("cmdlines", [])
 
     # Saídas
     firebase_enabled = bool(fb.get("enable", True))
@@ -528,7 +568,7 @@ def main():
         try:
             sys_metrics = collect_system_metrics()
             net_metrics = ping_latency(host, count=ping_count)
-            proc_metrics = collect_process_metrics(proc_names)
+            proc_metrics = collect_process_metrics(proc_names, proc_cmdlines)
             docker_metrics = collect_docker_metrics(enable=docker_enable, timeout_sec=docker_timeout)
 
             payload = {
